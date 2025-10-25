@@ -190,17 +190,95 @@ class DbUpdateDataTasks(ExternalAPITasks):
                 "timestamp": timestamp.isoformat()
             }
             
-        except HTTPException:
-            raise
+
         except DatabaseError as e:
             await session.rollback()
+             
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": "Database error", "details": str(e)}
+                detail={"error": "Internal server error"} 
             )
+
+
+    async def get_all_countries(self, 
+                                region: str | None,
+                                currency: str | None,
+                                sort: str| None,
+                                session: AsyncSession):
+        statement = select(Country)
+
+       
+        if region is not None:
+           
+            statement = statement.where(Country.region.ilike(f"%{region}%"))
+            
+       
+        if currency is not None:
+           
+            statement = statement.where(Country.currency_code.ilike(f"%{currency}%"))
+
+        if sort == 'gdp_desc':
+            statement = statement.order_by(Country.estimated_gdp.desc())
+        elif sort == 'gdp_asc':
+            
+            statement = statement.order_by(Country.estimated_gdp.asc())
+        
+        
+        result = await session.exec(statement)
+
+        return result.all()
+    
+    async def get_refresh_status(self, session: AsyncSession):
+        statement = select(RefreshMetadata)
+        result = await session.exec(statement)
+
+
+
+        return result.first()
+    
+    async def get_country_by_name(self, country_name, session: AsyncSession):
+        statement = select(Country).where(Country.name.islike(country_name))
+
+        result = statement.exec(statement)
+        country = result.first()
+
+        if result:
+            return result
+        
+        raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail="Country not found"
+        )
+
+
+
+   
+    async def delete_country_by_name(self, name: str, session: AsyncSession):
+        
+        try:
+          
+            statement = select(Country).where(Country.name.ilike(name))
+            result = await session.exec(statement)
+            country_to_delete = result.first()
+
+           
+            if not country_to_delete:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, 
+                    detail={"error": "Country not found"}
+                )
+            
+         
+            await session.delete(country_to_delete)
+         
+            await session.commit()
+            
+            return {"message": f"Country '{name}' deleted successfully"}
+            
         except Exception as e:
+            
             await session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": "Internal server error", "details": str(e)}
+                detail={"error": "Internal server error"}
             )
