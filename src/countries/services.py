@@ -108,7 +108,7 @@ class DbUpdateDataTasks(ExternalAPITasks):
             timestamp = datetime.now(timezone.utc)
 
             for country in countries:
-                # ✅ Handle empty currencies
+                # Handle empty currencies
                 country_currencies = country.get("currencies", [])
                 country_currency_code = None
                 
@@ -128,13 +128,13 @@ class DbUpdateDataTasks(ExternalAPITasks):
                 else:
                     estimated_gdp = None
                 
-                
+                # Check if country exists
                 statement = select(Country).where(Country.name.ilike(country['name']))
                 result = await session.exec(statement)  
                 existing_country = result.first()
 
                 if existing_country:
-                    
+                    # Update existing country
                     existing_country.capital = country.get('capital')
                     existing_country.region = country.get('region')
                     existing_country.population = country['population']
@@ -145,7 +145,7 @@ class DbUpdateDataTasks(ExternalAPITasks):
                     existing_country.last_refreshed_at = timestamp
                 
                 else:
-                   
+                    # Insert new country
                     new_country = Country(
                         name=country['name'],
                         capital=country.get('capital'),
@@ -161,7 +161,6 @@ class DbUpdateDataTasks(ExternalAPITasks):
             
             # Commit once
             await session.commit()
-
 
             # Update global metadata
             metadata_stmt = select(RefreshMetadata).where(RefreshMetadata.id == 1)
@@ -181,7 +180,7 @@ class DbUpdateDataTasks(ExternalAPITasks):
 
             await session.commit()
 
-            
+            # Generate summary image
             await self._generate_summary_image(countries, timestamp)
         
             return {
@@ -190,93 +189,97 @@ class DbUpdateDataTasks(ExternalAPITasks):
                 "timestamp": timestamp.isoformat()
             }
             
-
+        except HTTPException:
+            raise
         except DatabaseError as e:
             await session.rollback()
-             
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Internal server error"} 
+            )
+        except Exception as e:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "Internal server error"}
             )
 
 
     async def get_all_countries(self, 
                                 region: str | None,
                                 currency: str | None,
-                                sort: str| None,
+                                sort: str | None,
                                 session: AsyncSession):
         statement = select(Country)
 
-       
+        # Apply filters
         if region is not None:
-           
             statement = statement.where(Country.region.ilike(f"%{region}%"))
             
-       
         if currency is not None:
-           
             statement = statement.where(Country.currency_code.ilike(f"%{currency}%"))
 
+        # Apply sorting
         if sort == 'gdp_desc':
             statement = statement.order_by(Country.estimated_gdp.desc())
         elif sort == 'gdp_asc':
-            
             statement = statement.order_by(Country.estimated_gdp.asc())
         
-        
+        # Execute query
         result = await session.exec(statement)
-
         return result.all()
     
     async def get_refresh_status(self, session: AsyncSession):
-        statement = select(RefreshMetadata)
+        statement = select(RefreshMetadata).where(RefreshMetadata.id == 1)
         result = await session.exec(statement)
-
-
-
         return result.first()
     
-    async def get_country_by_name(self, country_name, session: AsyncSession):
-        statement = select(Country).where(Country.name.islike(country_name))
-
-        result = statement.exec(statement)
-        country = result.first()
-
-        if result:
-            return result
-        
-        raise HTTPException(
-            status_code= status.HTTP_404_NOT_FOUND,
-            detail="Country not found"
-        )
-
-
-
-   
-    async def delete_country_by_name(self, name: str, session: AsyncSession):
-        
+    async def get_country_by_name(self, country_name: str, session: AsyncSession):
         try:
-          
+            
+            statement = select(Country).where(Country.name.ilike(country_name))
+            result = await session.exec(statement)
+            country = result.first()
+
+            
+            if country:
+                return country
+            
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Country not found"}
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "Internal server error"}
+            )
+
+    async def delete_country_by_name(self, name: str, session: AsyncSession):
+        try:
+            # Find country
             statement = select(Country).where(Country.name.ilike(name))
             result = await session.exec(statement)
             country_to_delete = result.first()
 
-           
+            # Check if exists
             if not country_to_delete:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, 
                     detail={"error": "Country not found"}
                 )
             
-         
+            # Delete country
             await session.delete(country_to_delete)
-         
             await session.commit()
             
             return {"message": f"Country '{name}' deleted successfully"}
             
+        except HTTPException:
+            raise
         except Exception as e:
-            
             await session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
